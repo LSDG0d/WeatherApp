@@ -1,89 +1,126 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Windows.Forms;
+using System.Xml;
 using Newtonsoft.Json.Linq;
+using WeatherApp.Data;
+using WeatherApp.Models;
 
 namespace WeatherApp
 {
     public partial class MainForm : Form
     {
-        // Ключ API для OpenWeatherMap
-        private const string ApiKey = "ff88341c4cf15808a85ef21762d0845f";
-
-        // URL для получения данных о текущей погоде
-        private const string ApiUrl = "https://api.openweathermap.org/data/2.5/weather";
-
+        List<Cities> cities = new List<Cities>();
+        List<Forecast> forecasts = new List<Forecast>();
+        private void LoadCitiesInList()
+        {
+            dataGridViewCities.Rows.Clear();
+            cities = SqliteDataAccess.LoadCities();
+            foreach (Cities city in cities)
+            {
+                dataGridViewCities.Rows.Add(city.id, city.Name, city.Country);
+            }
+        }
+        private void LoadForecastInList()
+        {
+            dataGridViewForecast.Rows.Clear();
+            forecasts = SqliteDataAccess.LoadForecast();
+            foreach (Forecast forecast in forecasts)
+            {
+                dataGridViewForecast.Rows.Add(forecast.id, forecast.Cityid, forecast.DateFrom, forecast.DateTo, forecast.Temperature, forecast.Pressure);
+            }
+        }
         public MainForm()
         {
             InitializeComponent();
+            LoadCitiesInList();
+            LoadForecastInList();
+            LoadCitiesInCombobox();
+        }
+
+        private void LoadCitiesInCombobox()
+        {
+            comboBoxCities.Items.Clear();
+            foreach (Cities city in cities)
+            {
+                comboBoxCities.Items.Add(city.Name);
+            }
+            if (comboBoxCities.Items.Count > 0)
+            {
+                comboBoxCities.SelectedIndex = 0;
+            }
+        }
+        private void buttonUpdateCities_Click(object sender, EventArgs e)
+        {
+            dataGridViewCities.Rows.Clear();
+            LoadCitiesInList();
+        }
+        private async void buttonGetWeather_Click(object sender, EventArgs e)
+        {
+            string cityName = comboBoxCities.SelectedItem.ToString();
+            Cities selectedCity = cities.FirstOrDefault(city => city.Name == cityName);
+            if (selectedCity != null)
+            {
+                await WeatherService.GetWeatherForecast(selectedCity.Name, selectedCity.Country, selectedCity.id);
+            }
+            else
+            {
+                MessageBox.Show("Для ввода локации можете использовать первую панель.");
+            }
+            LoadForecastInList();
+        }
+
+        private void buttonUpdateForecast_Click(object sender, EventArgs e)
+        {
+            dataGridViewForecast.Rows.Clear();
+            LoadForecastInList();
+        }
+
+        private void buttonAddNew_Click(object sender, EventArgs e)
+        {
+            Cities city = new Cities();
+            city.Name = textBoxNameCity.Text;
+            city.Country = textBoxCountryCity.Text;
+            SqliteDataAccess.SaveCities(city);
+            LoadCitiesInList();
+            LoadCitiesInCombobox();
         }
 
         private void button1_Click(object sender, EventArgs e)
         {
-            // Получаем название города из текстового поля
-            string city = CityTextBox.Text;
-            if (string.IsNullOrEmpty(city))
-            {
-                MessageBox.Show("Введите название города");
-                return;
-            }
-
-            // Формируем URL для запроса к OpenWeatherMap API
-            string apiUrl = $"{ApiUrl}?q={city}&units=metric&appid={ApiKey}";
-
-            try
-            {
-                // Отправляем запрос и получаем ответ
-                string response = MakeApiRequest(apiUrl);
-
-                // Парсим ответ для получения данных о погоде
-                WeatherData weatherData = ParseWeatherData(response);
-
-                // Выводим информацию о погоде в Label
-                TemperatureLabel.Text = "Температура: " + weatherData.Temperature.ToString();
-                DescriptionLabel.Text = "Описание: " + weatherData.Description.ToString();
-                WindSpeedLabel.Text = "Скорость ветра: " + weatherData.WindSpeed.ToString();
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Ошибка: {ex.Message}");
-            }
+            SqliteDataAccess.DeleteForecastAll();
+            dataGridViewForecast.Rows.Clear();
+            forecasts.Clear();
+            LoadForecastInList();
         }
 
-        // Метод для отправки HTTP-запроса и получения ответа в виде строки
-        private string MakeApiRequest(string apiUrl)
+        private void buttonSearch_Click(object sender, EventArgs e)
         {
-            HttpWebRequest httpWebRequest = (HttpWebRequest)WebRequest.Create(apiUrl);
-            using (HttpWebResponse httpWebResponse = (HttpWebResponse)httpWebRequest.GetResponse())
-            using (StreamReader streamReader = new StreamReader(httpWebResponse.GetResponseStream()))
+            string searchDate = dateTimePickerSearchDate.Value.ToString("yyyy-MM-ddT") + dateTimePickerSearchTime.Text.ToString() + "Z";
+            string cityName = comboBoxCities.SelectedItem.ToString();
+            Cities selectedCity = cities.FirstOrDefault(city => city.Name == cityName);
+            dataGridViewForecast.Rows.Clear();
+            if (selectedCity != null && searchDate != null)
             {
-                return streamReader.ReadToEnd();
+                var searchResults = forecasts.Where(forecast => forecast.Cityid == selectedCity.id &&
+                                                         forecast.DateFrom == searchDate &&
+                                                         forecast.DateTo == searchDate).ToList();
+                if (searchResults.Count > 0)
+                {
+                    foreach(var forecast in searchResults)
+                    {
+                        dataGridViewForecast.Rows.Add(forecast.id, forecast.Cityid, forecast.DateFrom, forecast.DateTo, forecast.Temperature, forecast.Pressure);
+                    }
+                }
+                else
+                {
+                    MessageBox.Show("Результатов не найдено. Воспользуйтесь кнопкой Get");
+                }
             }
         }
 
-        // Метод для парсинга JSON-данных о погоде
-        private WeatherData ParseWeatherData(string json)
-        {
-            var data = JObject.Parse(json);
-            double temperature = data["main"]["temp"].Value<double>();
-            string description = data["weather"][0]["description"].Value<string>();
-            double windSpeed = data["wind"]["speed"].Value<double>();
-
-            return new WeatherData
-            {
-                Temperature = temperature,
-                Description = description,
-                WindSpeed = windSpeed
-            };
-        }
-    }
-
-    // Класс для хранения данных о погоде
-    public class WeatherData
-    {
-        public double Temperature { get; set; }
-        public string Description { get; set; }
-        public double WindSpeed { get; set; }
     }
 }
